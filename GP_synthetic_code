@@ -1,0 +1,106 @@
+import numpy as np
+import matplotlib.pyplot as plt
+%matplotlib inline
+import pandas as pd
+import os
+import sys
+import multiprocessing as mp
+import itertools
+import pickle
+import time
+import gpflow
+import tensorflow as tf
+
+from IPython.display import display
+from sklearn.model_selection import train_test_split
+from sklearn.model_selection import KFold
+from sklearn import preprocessing
+from tqdm import tqdm
+from scipy.spatial.distance import squareform, pdist, cdist
+
+## setting up parameter value for generating input
+x1_par = 4
+x2_par = 1.0
+s_par = 1.0
+sigma_y = 0.1
+sigma_a = 0.5
+## number of samples
+n_inp = 1000
+
+
+def fair_sample1(sigma_s,sigma_a,sigma_y,n_inp):
+    #np.random.seed(1988)
+    s = np.random.normal(0,sigma_s,(n_inp,1))
+    a = np.log(abs(s)) + np.random.normal(0,sigma_a,(n_inp,1))
+    y = s**2 + a**2 + np.random.normal(0,sigma_y,(n_inp,1))
+    
+    x = np.concatenate((s,a),axis=1)
+    return  x, y
+x_sim , y_sim = fair_sample1(sigma_s = 1.0,sigma_a = 0.5, sigma_y = 0.5, n_inp = n_inp)
+x_scaled = preprocessing.scale(x_sim)
+y_scaled = preprocessing.scale(y_sim)
+
+x_train,x_test,y_train,y_test = train_test_split(x_scaled,y_scaled,test_size = 0.2)    
+s_train = x_train[:,0].reshape(x_train.shape[0],1)
+s_test = x_test[:,0].reshape(x_test.shape[0],1)
+
+
+def get_sigma_median_heuristic(X):
+    n=X.shape[0]
+    if n>1000:
+        X=X[permutation(n)[:1000],:]
+    dists=squareform(pdist(X, 'euclidean'))
+    median_dist=np.median(dists[dists>0])
+    sigma=median_dist/np.sqrt(2.)
+    return sigma
+median_dis = get_sigma_median_heuristic(x_train)
+
+k1 = gpflow.kernels.RBF(input_dim = 2,lengthscales = 0.75426984 )
+k2 = gpflow.kernels.RBF(input_dim = 1,lengthscales = 0.5)
+k3 = gpflow.kernels.FairKernel(kernels = [k1,k2],x_train =x_train,s_train = s_train, 
+                               delta =  4424133.9200892 )
+m3 = gpflow.models.GPR(x_train, y_train, kern=k3)
+m3.likelihood.variance = 0.002160826
+meany_tst,vary_tst = m3.predict_y(x_test)
+meany_train,vary_train = m3.predict_y(x_train)
+
+n_train = x_train.shape[0]
+k2_ss = k2.compute_K(s_train,s_train)
+H = np.eye(n_train)- 1.0/n_train*np.outer(np.ones(n_train), np.ones(n_train))
+Hk2_ssH = np.matmul(np.matmul(H,k2_ss),H)
+
+hsic_y = 1.0/n_train**2 * meany_train.T.dot(Hk2_ssH).dot(meany_train)
+hsic = 1.0/n_train**2 * y_train.T.dot(Hk2_ssH).dot(y_train)
+
+m3.kern.kernels[0].variance.trainable = False
+m3.kern.kernels[1].variance.trainable = False
+m3.kern.kernels[1].lengthscales.trainable = False
+m3.kern.delta.trainable = False
+m3.as_pandas_table()
+
+gpflow.train.ScipyOptimizer().minimize(m3)
+
+m3.as_pandas_table()
+
+meany_tst,vary_tst = m3.predict_y(x_test)
+meany_train,vary_train = m3.predict_y(x_train)
+
+n_train = x_train.shape[0]
+k2_ss = k2.compute_K(s_train,s_train)
+H = np.eye(n_train)- 1.0/n_train*np.outer(np.ones(n_train), np.ones(n_train))
+Hk2_ssH = np.matmul(np.matmul(H,k2_ss),H)
+
+hsic_y = 1.0/n_train**2 * meany_train.T.dot(Hk2_ssH).dot(meany_train)
+hsic = 1.0/n_train**2 * y_train.T.dot(Hk2_ssH).dot(y_train)
+
+
+plt.plot(rmse1,np.log10(hsic1),linewidth = 3)
+plt.plot(rmse_gp,np.log10(hsic_gp),linewidth = 3)
+plt.xlabel("RMSE",fontsize = 20)
+plt.ylabel("HSIC",fontsize = 20)
+plt.title("Simulated Data")
+plt.legend(("Kernel Ridge Regression","Fair GP"),loc='lower left',fontsize = 12)
+plt.savefig("synthetic data simulation.pdf")
+
+
+

@@ -1,0 +1,65 @@
+class FairKernel(Combination):
+    def __init__(self,kernels,x_train,s_train,delta=1.0,name=None):
+        super().__init__(kernels,name)
+        self.x_train = x_train
+        self.s_train = s_train
+        self.delta = Parameter(delta, transform=transforms.positive,
+                               dtype=settings.float_type)
+
+
+    @params_as_tensors
+    def K(self,X,X2=None,presliced=False):
+        if X2 == None:
+            X2 = X
+        k_1 = self.kernels[0]
+        k_2 = self.kernels[1]
+
+        n_train,x_dim = self.x_train.shape
+        s_dim = self.s_train.shape[1]
+
+        v1 = tf.reshape(tf.ones(n_train,dtype = tf.float64),[n_train,1])
+        H = tf.eye(n_train,dtype = tf.float64)- 1.0/n_train * tf.matmul(v1,tf.transpose(v1))
+        K_1 = k_1.K(X,X2)		
+        K_1_tr_X =k_1.K(self.x_train,X)
+        K_1_tr_X2 = k_1.K(self.x_train,X2)
+        K_1_tr_tr = k_1.K(self.x_train,self.x_train)
+
+        K_2_tr_tr = k_2.K(self.s_train,self.s_train)
+        K_2_tr_trH = tf.matmul(K_2_tr_tr,H)
+        HK_2_tr_trH = tf.matmul(H,K_2_tr_trH)
+
+
+        LK = tf.matmul(HK_2_tr_trH,K_1_tr_tr)
+        inside_inv = tf.eye(n_train,dtype = tf.float64)+LK*self.delta/n_train**2.0
+        out_inv = tf.matmul(HK_2_tr_trH,K_1_tr_X2)
+        inv = tf.linalg.solve(inside_inv,out_inv)
+        K_chunk = tf.matmul(tf.transpose(K_1_tr_X),inv) * self.delta/n_train**2.0 
+        return (K_1-K_chunk)
+
+    @params_as_tensors
+    def Kdiag(self,X, presliced=False):
+        k_1 = self.kernels[0]
+        k_2 = self.kernels[1]
+
+        n_train,x_dim = self.x_train.shape
+        s_dim = self.s_train.shape[1]
+        n_X = X.shape[0]
+
+        v1 = tf.reshape(tf.ones(n_train,dtype = tf.float64),[n_train,1])
+        H = tf.eye(n_train,dtype = tf.float64)- 1.0/n_train * tf.matmul(v1,tf.transpose(v1))
+        K_1 = k_1.K(X,X)		
+        K_1_tr_X =k_1.K(self.x_train,X)
+        K_1_tr_tr = k_1.K(self.x_train,self.x_train)
+
+        K_2_tr_tr = k_2.K(self.s_train,self.s_train)
+        K_2_tr_trH = tf.matmul(K_2_tr_tr,H)
+        HK_2_tr_trH = tf.matmul(H,K_2_tr_trH)
+
+
+        LK = tf.matmul(HK_2_tr_trH,K_1_tr_tr)
+        inside_inv = tf.eye(n_train,dtype = tf.float64)+LK*self.delta/n_train**2.0
+        out_inv = tf.matmul(HK_2_tr_trH,K_1_tr_X)
+        inv = tf.linalg.solve(inside_inv,out_inv)
+        K_chunk = tf.matmul(tf.transpose(K_1_tr_X),inv)*self.delta/n_train**2.0
+        return tf.diag_part(K_1 - K_chunk)
+
